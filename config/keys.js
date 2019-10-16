@@ -1,3 +1,4 @@
 module.exports = {
-    MongoURI : 'mongodb://callme1:callme123@ds018308.mlab.com:18308/myvote-trialdb'
+    MongoURI : 'mongodb://localhost:27017/myvote-v2',
+    AMQURL : 'amqp://localhost:5672'
 };

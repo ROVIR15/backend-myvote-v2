@@ -8,7 +8,10 @@ const cors = require('cors')
 
 const user = require('./routes/api/user')
 const admin = require('./routes/api/admin')
+const voter = require('./routes/api/pemilih')
 const app = express();
+
+const {start} = require('./helpers/amqplib')
 
 require('./config/passport');
 require('./models/User');
@@ -30,11 +33,10 @@ mongoose
     .then(() => console.log('MongoDB Connected...'))
     .catch(err => console.log(err));
 
-app.use('/users', user);
-app.use('/dashboard/admin', admin);
-// app.use('/dashboard/pemilih', some-files);
-//app.use('/register', register);
-//app.use('/logout', logout);
+app.use('/', user);
+app.use('/administrator', admin);
+
+start();
 
 const port = process.env.PORT || 5000;
 

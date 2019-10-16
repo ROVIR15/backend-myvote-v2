@@ -1,20 +1,17 @@
 const passport = require('passport');
 const router = require('express').Router();
-const Kegiatan = require('../../models/KegiatanSchema')
-const Users =require('../../models/User');
+
 const UsersSession = require('../../models/UserSession');
-const AdminPenyelenggara = require('../../models/AdminPenyelenggaraSchema');
-const Institusi = require('../../models/InstitusiSchema');
-const DetailKegiatan = require('../../models/DetailKegiatanSchema')
+const Election = require('../../models/Election')
+const Users =require('../../models/User');
+const Administrator = require('../../models/Administrator');
+const TransactionStorage = require('../../models/TransactionStorage');
+
+const {publish} = require('../../helpers/amqplib')
 
 function randomIntFromInterval(min,max) {
     return Math.floor(Math.random()*(max-min+1)+min);
 }
-
-router.get('/', function(req, res){
-    Users.find()
-    .then(user => res.json({user}));
-})
 
 router.get('/login', function(req, res){
     res.render('login');
@@ -24,7 +21,6 @@ router.post('/login', function(req, res, next){
     passport.authenticate('local', function(err, user, info) {
         if (err) { return next(err); }
         if (!user) { return res.status(401).json({status : false, message : {error : info}}) } 
-        console.log(err, user, info)
         if (user && typeof user === 'object') {
             req.logIn(user, function(err) {
             if (err) { return next(err); }
@@ -48,43 +44,30 @@ router.post('/login', function(req, res, next){
     })(req, res, next);
 })
 
-router.post('/register', function(req, res){
-    const { body: { data } } = req;
+router.post('/sign-up', function(req, res){
+  const {body: {data : {administrator_name, election_name, election_description, email, address, identification_id, position, organization_name}}} = req;
+  
+  const dataAdministrator = {name: administrator_name, email, institution_address: address, identification_id, position}
+  const dataElection = {election_name, description: election_description, institution_name: organization_name, insititution_address: address};
 
-    let data1 = { nama_kegiatan: data.nama_kegiatan, des_kegiatan: data.des_kegiatan}
+  const newAdministrator = new Administrator(dataAdministrator);
+  const newElection = new Election(dataElection);
+  const dataUser = {_id: newAdministrator._id, username: identification_id, password: "123456", email: email}
+  const newUser =  new Users(dataUser);
+  const dataTransaction = {related_id: newElection._id}
+  const newTransactionList = new TransactionStorage(dataTransaction)
 
-    const finalKegiatan = new Kegiatan(data1);
+  newAdministrator.save();
+  newElection.save();
+  newUser.save();
+  newTransactionList.save()
 
-    finalKegiatan.save().then(() => console.log("success adding event to Kegiatan models"));
-
-    let data2 = { id_kegiatan: finalKegiatan._id, nama_adminpeny: data.nama_admpeny, nik_adminpeny: data.nik_admpeny ,jabatan_adminpeny: data.jabatan_admpeny, email_adminpeny: data.email_admpeny}
-    
-    const finalAdminPenyelenggara = new AdminPenyelenggara(data2)
-
-    finalAdminPenyelenggara.save().then(() => console.log("success adding admin to Admin Penyelenggara models"))
-
-    let  data3 = {nama_institusi: data.nama_institusi, alamat_institusi: data.alamat_institusi_admpeny}
-    
-    const finalInstitusi = new Institusi(data3);
-
-    finalInstitusi.save().then(()=> console.log("success adding institusi models"))
-
-    var randomPassword = randomIntFromInterval(342323,31290830).toString()
-    let data4 = {username: finalAdminPenyelenggara.nik_adminpeny, password: randomPassword, email: finalAdminPenyelenggara.email_adminpeny}
-
-    const finalUser = new Users(data4)
-
-    finalUser.setPassword(finalUser.password);
-
-    let data5 = {id_admin_penyelenggara: finalAdminPenyelenggara._id,
-                    id_kegiatan: finalKegiatan._id ,
-                    id_institusi: finalInstitusi._id}
-
-    const finalDetailKegiatan = new DetailKegiatan(data5)
-
-    finalDetailKegiatan.save().then(()=> console.log("success adding detail kegiatan"))
-
-    return finalUser.save().then(() => res.json({success: true, message: "Your data has been added", data: {username: finalUser.username, password: randomPassword}}));
+  return res.json({ok: true})
+  // try {
+  //   return res.json({success: true, data: obj});
+  // } catch (error) {
+  //   if(error) return res.status(401).json({error: new Error(error)});
+  // };
 })
 
 router.get('/logout', function(req, res){
@@ -110,14 +93,12 @@ router.get('/verify', function(req, res){
         isAuth: true
       }, (err, sessions) => {
         if (err) {
-          console.log(err);
           return res.send({
             success: false,
             message: 'Error: Server error'
           });
         }
         if (sessions.length != 1) {
-          console.log(sessions);
           return res.send({
             success: false,
             message: 'Error: Invalid'

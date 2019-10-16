@@ -1,141 +1,213 @@
 const router = require('express').Router();
-const Kegiatans = require('../../models/KegiatanSchema')
-const Pemilih = require('../../models/Pemilih')
-const Kandidat = require('../../models/Kandidat')
-const DetailKegiatan = require('../../models/DetailKegiatanSchema')
+const Election = require('../../models/Election');
+const Voter = require('../../models/Voter');
+const User = require('../../models/User')
+const Candidate = require('../../models/Candidate');
+const Administrator = require('../../models/Administrator');
+const Transaction = require('../../models/TransactionStorage')
+const {publish, amqpConn} = require('../../helpers/amqplib')
 
 /* pemilih related ===============================================*/
-router.post('/kegiatan/:id_kegiatan/tambah-pemilih', function(req, res){
-    const {body: {data} } = req;
-    const {params: {id_kegiatan}} = req;
-    const finalPemilih = new Pemilih(data);
+router.post('/voters', function(req, res){
+    const {body: {data: {election_id}}} = req;
 
-    finalPemilih.save().then(() => console.log("Data Pemilih has been added"));
-
-    let {id_voter} = finalPemilih
-        DetailKegiatan.updateOne({id_kegiatan: id_kegiatan}, {$push : {id_voter: id_voter}}, function(err, voter){
-        if(err) return res.json({success: false, message: {error: err}})
-        if(voter.nModified === 0) console.log({success: false, message: {error: "Cannot adding Pemilih"}});
-        console.log(voter)
-        return res.json({success: true, message: {voter}})
-    })
-
-})
-
-router.put('/kegiatan/:id_kegiatan/ubah-pemilih/', function(req, res){
-    const {params: {id_kegiatan}} = req;
-
-    DetailKegiatan.find({id_kegiatan: id_kegiatan}, function(err, found){
-        if(err) return res.status(401).json({success: false, message: {error: "Something goes wrong"}});
-        if(!found) return res.status(404).json({success: false, message: {error: "Kegiatan not found"}});
-        let temp = found[0], {id_voter} = temp;
-        console.log(temp, id_voter)
-        Pemilih.find({id_voter: { $in : id_voter}}).exec(function(err, voters){
-            if(err) return res.status(401).json({success: false, message: {error: "Something goes wrong!"}});
-            if(!voters) return res.status(400).json({success: false, message: {error: "Voters not found!"}});
-            return res.status(200).json({success: true, message: {data: voters}});
-        })
+    Voter.find({election_id}, function(err, info){
+        if(err) return res.json({success: false, message: "Something goes wrong!"})
+        if(!info) return res.json({success: false, message: `Cannot find voters with election id ${election_id}`})
+        return res.json({success: true, data: info});
     })
 })
 
-router.put('/kegiatan/:id_kegiatan/update-pemilih/:id_voter', function(req, res){
-	const {params:{id_voter}} = req
-    Pemilih.update({ id_voter: id_voter }, { $set: { size: 'large' }}).exec(function(err, voter){
-        if(err) return res.json({success: false, error: "something goes wrong!"})
-        if(!voter) return res.status(404).json({success: false, error: "Pemilih doesn't recognized by system"})
-        return res.json({success: true, msg: {voter, pesan : 'data Pemilih has been updated'}})
-    });
-});
-
-router.delete('/kegiatan/:id_kegiatan/hapus-pemilih/:id_pemilih', function(req, res){
-    const {params:{id_pemilih, id_kegiatan}} = req
-    DetailKegiatan.updateOne({id_kegiatan: id_kegiatan}, {$pull : {id_voter : id_pemilih}}).exec(function(err, success){
-        if(err) return res.json({success: false, error: "something was wrong"});
-        if(success.nModified === 0) return res.json({success: false, error: "Nothing has changed"})
-        Pemilih.findOneAndRemove({id_voter:id_pemilih}).exec(function(err, Candidate){
-            if(err) return res.json({success: false, error: "something goes wrong!"})
-            if(!Candidate) return res.status(404).json({success: false, error: "Pemilih doesn't recognized by system"})
-            return res.json({success: true, msg: 'data Pemilih has been deleted'})
-        });  
+router.post('/add-voters', function(req, res){
+    const {body: {data, election_id} } = req;
+    let error = []
+    data.map((voter)=> {
+        voter = {...voter, election_id};
+        const storeVoter = new Voter(voter);
+        try {
+            let newVoter = storeVoter.save();
+            const dataUser = {_id: storeVoter._id, username: voter.identification_id, password: "123456", email: voter.email}
+            const newUser =  new User(dataUser);
+            if(newUser._id !== storeVoter._id){
+                User.updateOne({username: newVoter.identification_id}, {$set : {_id: newVoter._id}}, function(err, info){
+                    if(err) console.error(err);
+                    if(info.nModified === 0) console.error("Something wasn't right!");
+                })
+            } 
+            newUser.save().then(console.log)
+        } catch(err){
+            console.log(err)
+            error.push(`Error when saving data ${voter.identification_id}`)
+        }
     })
-  });
 
-/* kandidat related ===============================================*/
-router.post('/kegiatan/:id_kegiatan/tambah-kandidat', function(req, res){
-    const{params:{id_kegiatan}} = req;
-    const{body: {data}} = req;
-
-    const finalKandidat = new Kandidat(data)
-
-    finalKandidat.save(function(err, Candidate){
-        if(err) return res.json({success: false, error: "something goes wrong!"})
-        if(!Candidate) return res.status(404).json({success: false, error: "Kandidat doesn't recognized by system"})
-        DetailKegiatan.updateOne({id_kegiatan: id_kegiatan}, {$push: {id_kandidat: finalKandidat._id}}).exec(function(err, success){
-            if(err) return res.json({success: false, error: "cannot find kegiatan"});
-            if(success.nModified === 0) return res.json({success: false, error: ""})
-            return res.json({success: true, message: "successfully adding kandidat into kegiatan"});
-        })
-    })
+    return res.json({success: true, message: "Successfully adding new data to database", error})
 })
 
-router.get('/kegiatan/:id_kegiatan/ubah-kandidat', function(req, res){
-	const {params:{id_kegiatan}} = req
-    DetailKegiatan.findOne({id_kegiatan: id_kegiatan}).exec(function(err, event){
-        if(err) return res.json({success: false, message: {error: "Something goes wrong, cannot find any kegiatan"}});
-        if(!event) return res.json({success: false, message: {error: "Kandidat not found"}})        
-        let temp = event[0], {id_kandidat} = temp;
-        Kandidat.find({id_kandidat: id_kandidat}).exec(function(err, candidates){
-            if(err) return res.json({success: false, message: {error: "Something goes wrong, cannot find any kegiatan"}});
-            if(!candidates) return res.json({success: false, message: {error: "Kandidats not found"}});
-            return res.json({success: true, message: {data: candidates}})
-        });
-    })
-});
-
-router.put('/kegiatan/:id_kegiatan/update-kandidat/:id_kandidat', function(req, res){
-    const {params:{id_kandidat}} = req;
+router.put('/update-voter', function(req, res){
     const {body: {data}} = req;
 
-    Kandidat.update({ _id: id_kandidat }, { $set: { data }}).exec(function(err, Candidate){
+    Voter.updateOne({_id: data._id}, {$set: data}, function(err, info){
         if(err) return res.json({success: false, error: "something goes wrong!"})
-        if(!Candidate) return res.status(404).json({success: false, error: "Kandidat doesn't recognized by system"})
-        return res.json({success: true, msg: {Candidate, pesan : 'data Kandidat has been updated'}})
-    });
-});
-
-router.delete('/kegiatan/:id_kegiatan/hapus-kandidat/:id_kandidat', function(req, res){
-	const {params:{id_kandidat, id_kegiatan}} = req
-
-    DetailKegiatan.updateOne({id_kegiatan: id_kegiatan}, {$pull : {id_kandidat : id_kandidat}}).exec(function(err, success){
-        if(err) return res.json({success: false, error: "something was wrong"});
-        if(success.nModified === 0) return res.json({success: false, error: "Nothing has changed"})
-        Kandidat.findOneAndRemove({_id:id_kandidat}).exec(function(err, Candidate){
-            if(err) return res.json({success: false, error: "something goes wrong!"})
-            if(!Candidate) return res.status(404).json({success: false, error: "Kandidat doesn't recognized by system"})
-            return res.json({success: true, msg: 'data Kandidat has been deleted'})
-        });
-    });
-});
-
-/* kegiatan related ===============================================*/
-
-router.get('/kegiatan/:id_kegiatan/profil-kegiatan', function(req, res){
-    const {params: {id_kegiatan}} = req;
-	Kegiatans.findById({_id : id_kegiatan}, function(err, event){
-        console.log(err, event)
-		if(err) return res.json({success: false, error: {message : "Something goes wrong"}});
-		return res.json({success: true, message: { data: event }})
-	});
+        if(!info) return res.status(404).json({success: false, error: "Pemilih doesn't recognized by system"})
+        return res.json({success: true, data: info})
+    })
 })
 
-router.put('/kegiatan/:id_kegiatan/update-kegiatan', function(req, res){
-	const {params: {id_kegiatan}} = req;
-	const {body: {data}} = req;
+router.delete('/delete-voter', function(req, res){
+    const {body: {data}} = req
+    Voter.findByIdAndRemove({_id: data._id}, function(err, info){
+        if(err) return res.json({success: false, message: "Something goes wrong!"});
+        return res.json({success:true})
+    })
+});
 
-	Kegiatans.updateOne({_id: id_kegiatan}, {$set: {"waktu_mulai": new Date(data.waktu_mulai), "waktu_akhir": new Date(data.waktu_akhir)}}, function(err, event){
-		if(err) return res.json({success: false, message: { error : err}});
-		if(event) return res.json({success: true, message: {data : event}});
-	})
+/* kandidat related ===============================================*/
+router.post('/candidates', function(req, res){
+    const {body: {data: {election_id}}} = req;
+
+    Candidate.find({election_id}, function(err, info){
+        if(err) return res.json({success: false, message: "Something goes wrong!"})
+        if(!info) return res.json({success: false, message: `Cannot find candidates with election id ${election_id}`})
+        return res.json({success: true, data: info});
+    })
+})
+
+router.post('/add-candidates', function(req, res){
+    const {body: {data, election_id}} = req;
+
+    const error = []
+    data.map(candidate => {
+        candidate = {...candidate, election_id};
+        const storeCandidate = new Candidate(candidate);
+        try {
+            storeCandidate.save();
+        } catch(err){
+            error.push(`Error when saving data ${candidate.name}`)
+        }
+    })
+
+    return res.status(200).json({success: true, message: "Successfully adding candidates to system", error})
+})
+
+router.put('/update-candidate', function(req, res){
+    const {body: {data}} = req;
+
+    Candidate.updateOne({ _id: data._id }, { $set: data }).exec(function(err, Candidate){
+        if(err) return res.json({success: false, error: "something goes wrong!"})
+        if(!Candidate) return res.status(404).json({success: false, error: "Kandidat doesn't recognized by system"})
+        return res.json({success: true, data: Candidate, message: "Successfully update candidate data"})
+    });
+});
+
+router.delete('/delete-candidate', function(req, res){
+    const {body: {data}} = req;
+
+    Candidate.findByIdAndRemove({_id: data._id}, function(err, info){
+        if(err) return res.json({success: false, message: `Something goes wrong!`})
+        return res.json({success: true, message: `Successfully remove data voter with id ${data._id}`})        
+    })
+});
+/* kegiatan related ===============================================*/
+/**
+ * const data = {
+ *  uid: "",
+ *  election_id: ""
+ * }
+ */
+router.post('/', async function(req,res){
+    const {body: {data: {election_id, uid}}} = req
+
+    const election = await Election.findOne({_id: election_id}, function(err, info){
+        if(err) return res.json({success: false, message: "Something goes wrong!"});
+        if(!info) return res.json({success: false, message: 'Not found'})
+        return info
+    })
+
+    var administrator = await Administrator.findOne({_id: uid}, function(err, info){
+        if(err) return res.json({success: false, message: "Something goes wrong!"});
+        if(!info) return res.json({success: false, message: 'Not found admmin'})
+        return info
+    })
+
+    var transaction = await Transaction.findOne({related_id: election_id}, function(err, info){
+        if(err) return res.json({success: false, message: "Something goes wrong!"});
+        if(!info) return res.json({success: false, message: 'Not found'})
+        return info
+    })
+
+    const res_data = {
+        doc: {
+            contract_address: election.contract,
+            transaction_hash: election.transaction_hash,
+        },
+        election: {
+            id: election._id,
+            name: election.election_name,
+            date_reg: election.timestamp,
+            start: new Date(election.election_start),
+            end: new Date(election.election_end),
+        },
+        administrator: {
+            id: administrator._id,
+            name: administrator.name
+        },
+    }
+    return res.json({success: true, data: res_data})
+})
+
+router.put('/update-election', function(req, res){
+    const {body: {data}} = req;
+
+    const obj = {election_start: new Date(data.election_start), election_end: new Date(data.election_end)}
+    Election.updateOne({_id: data._id}, {$set : obj}, function(err, info){
+        if(err) return res.json({success: false, message: "Something goes wrong!"})
+        if(!info) return res.json({success: false, message: "Nothing has changed!"})
+        return res.json({success: true, message: "Done"});
+    })
+})
+
+async function getUserData(id, cb){
+    await User.findById({_id: id}, function(err, info){
+        if(err || !info) throw new Error("Please check your body data")
+        cb(obj.encpk);
+    })
+}
+
+router.post('/create-election-contract', function(req, res){
+    const {body: {data}} = req;
+    
+    console.log(data);
+    if(!data) return res.json({ok: false, message: {error: new Error("Cannot found election data!")}})
+    publish("", "create-election", new Buffer.from(JSON.stringify(data)))
+
+    return res.json({ok: true})
+})
+
+/**
+ * @params {Object} data
+ * @description 
+ * @param {String} election_id
+ * @param {String} administrator_id
+ * @param {Array} voters
+ */
+router.post('/activate-voters', function(req, res){
+    const {body} = req;
+
+    publish("", "activate-voters", new Buffer.from(JSON.stringify(body)));  
+    return res.json({ok: true})
+})
+
+/**
+ * @params {Object} data
+ * @description 
+ * @param 
+ */
+router.post('/activate-candidates', function(req, res){
+    const {body} = req;
+    
+    publish("", "activate-candidates", new Buffer.from(JSON.stringify(body)));
+    return res.json({ok: true})
 })
 
 module.exports = router;
